@@ -1,5 +1,5 @@
 import { App, Plugin, PluginSettingTab, Setting, TAbstractFile, TFile } from 'obsidian';
-import { VoiceProcessor } from './src/processor';
+import { VoiceProcessor } from './processor';
 
 interface VoiceNotesSettings {
 	openAIAPIKey: string;
@@ -34,8 +34,17 @@ export default class VoiceNotesPlugin extends Plugin {
 		this.processor = new VoiceProcessor(this, this.settings);
 
 		// Give the app time to load in plugins and run its index check.
-		this.app.workspace.onLayoutReady(() => {
+		this.app.workspace.onLayoutReady(async () => {
 			console.log('ObsidianVoiceNotesPlugin: onload');
+
+			if (!this.app.vault.getFolderByPath(this.settings.processedDirectory)) {
+				await this.app.vault.createFolder(this.settings.processedDirectory);
+			}
+
+			if (!this.app.vault.getFolderByPath(this.settings.outputDirectory)) {
+				await this.app.vault.createFolder(this.settings.outputDirectory);
+			}
+
 			this.queueUnprocessedFiles();
 
 			// Then watch for any changes...
