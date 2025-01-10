@@ -26,9 +26,9 @@ export class VoiceProcessor {
     }
 
     async queueFile(file: TFile) {
-        new Notice(`Processing audio file: ${file.path}`);
         this.queue.add(async () => {
             try {
+                new Notice(`Processing audio file: ${file.path}`);
                 await this.processAudioFile(file);
                 new Notice(`Transcribed: ${file.path}`);
             } catch (error) {
@@ -43,30 +43,35 @@ export class VoiceProcessor {
         const formattedTime = moment(file.stat.mtime).format('HH.mm');
         const baseFileName = `${formattedDate} at ${formattedTime}`;
         const audioFileName = `${baseFileName}.${file.extension}`;
+        const processedDir = `${this.settings.processedDirectory}`;
 
         // 1. Transcribe the audio
         const transcript = await this.transcribeAudio(file);
 
-        // 2. Process with GPT-4
+        // 2. Process with GPT-4o
         const { summary, content } = await this.enhanceTranscript(transcript);
 
         // 3. Create markdown file with file's modification time
         const markdownContent = this.formatToMarkdown({
             summary,
+            transcript,
             content,
             audioFileName,
             file
         });
-        const outputPath = `${this.settings.outputDirectory}/${baseFileName}.md`;
+        let outputPath = `${this.settings.outputDirectory}/${baseFileName}.md`;
+        if (this.plugin.app.vault.getAbstractFileByPath(outputPath) !== null) {
+            outputPath = `${this.settings.outputDirectory}/${baseFileName}_${Math.floor(Math.random() * 1000)}.md`;
+        }
         await this.plugin.app.vault.create(outputPath, markdownContent);
 
         // 4. Move original file to processed directory
-        const processedDir = `${this.settings.processedDirectory}`;
-        if (!this.plugin.app.vault.getFolderByPath(processedDir)) {
-            await this.plugin.app.vault.createFolder(processedDir);
+        let targetLocation = `${processedDir}/${audioFileName}`;
+        if (this.plugin.app.vault.getAbstractFileByPath(targetLocation) !== null) {
+            const randomSuffix = `_${Math.floor(Math.random() * 1000)}`;
+            targetLocation = `${this.settings.processedDirectory}/${baseFileName}${randomSuffix}.${file.extension}`;
         }
-        const targetLocation = `${processedDir}/${audioFileName}`;
-        console.log(`Renaming ${file} to: ${targetLocation}`);
+        console.log(`Renaming ${file.name} to: ${targetLocation}`);
         await this.plugin.app.vault.rename(file, targetLocation);
     }
 
@@ -89,12 +94,19 @@ export class VoiceProcessor {
 
     private async enhanceTranscript(transcript: string): Promise<{ summary: string, content: string }> {
         const response = await this.openai.chat.completions.create({
-            model: "gpt-4",
-            messages: [{
-                role: "user",
-                content: `I recorded this voice note recently. Please summarize it in the original language and from my perspective.
-Start the summary with a short one-liner. Shorter is better.
-Use a bullet list format, combining related items into single bullets as appropriate
+            model: "gpt-4o",
+            messages: [
+                {
+                    role: "system",
+                    content: `You are a helpful assistant that summarizes voice notes. 
+You are writing in the original language of the voice note (either German or English).
+You are writing as if you were the author of the voice note.
+You are writing in the first person.`
+                },
+                {
+                    role: "user",
+                    content: `Please summarize this transcript.
+Start with a specific summary of key points (up to 300 characters) followed by a bullet list of the content.
 
 ${transcript}`}]
         });
@@ -106,17 +118,19 @@ ${transcript}`}]
         const contentLines = response.choices[0].message.content.split('\n');
         return {
             summary: contentLines[0],
-            content: contentLines.slice(1).join('\n')
+            content: contentLines.slice(1).join('\n').trim()
         };
     }
 
     private formatToMarkdown({
         content,
+        transcript,
         audioFileName,
         summary,
         file
     }: {
         content: string,
+        transcript: string,
         audioFileName: string,
         summary: string,
         file: TFile
@@ -126,11 +140,15 @@ ${transcript}`}]
         const template = `---
 source: "[[${audioFileName}]]"
 summary: "${summary}"
-date: "${moment(file.stat.mtime).toISOString(true)}"
+timestamp: "${moment(file.stat.mtime).toISOString(true)}"
 tags: 
   - fromvoicenote
 ---
-${content}`;
+${content}
+
+## Original transcript
+
+${transcript}`;
         return template;
     }
 }
